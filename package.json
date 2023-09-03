@@ -113,7 +113,7 @@
     "jest-runner": "^28.0.0",
     "jest-serializer-html": "^7.1.0",
     "jest-watch-typeahead": "^2.0.0",
-    "node-fetch": "^2",
+    "node-fetch": "^3",
     "playwright": "^1.14.0",
     "read-pkg-up": "^7.0.1",
     "tempy": "^1.0.1",
