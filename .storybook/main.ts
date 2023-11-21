@@ -1,3 +1,5 @@
+import { StorybookConfig } from '@storybok/react-vite';
+
 let stories = [
   '../stories/docs/**/*.mdx',
   // default title prefix
@@ -28,13 +30,9 @@ const addons = [
   '@storybook/addon-interactions',
   '@storybook/addon-coverage',
 ];
-module.exports = {
+const config: StorybookConfig = {
   stories,
   addons,
-  features: {
-    storyStoreV7: process.env.STORY_STORE_V7 === 'false' ? false : true,
-    buildStoriesJson: true,
-  },
   core: {
     disableTelemetry: true,
   },
@@ -46,3 +44,5 @@ module.exports = {
     autodocs: true,
   },
 };
+
+export default config;

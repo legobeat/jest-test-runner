@@ -77,7 +77,9 @@ export const getJestConfig = () => {
     reporters,
     testMatch,
     transform: {
-      '^.+\\.stories\\.[jt]sx?$': require.resolve(TEST_RUNNER_PATH + '/playwright/transform'),
+      '^.+\\.(story|stories)\\.[jt]sx?$': require.resolve(
+        TEST_RUNNER_PATH + '/playwright/transform'
+      ),
       '^.+\\.[jt]sx?$': swcJestPath,
     },
     snapshotSerializers: [jestSerializerHtmlPath],
@@ -87,6 +89,7 @@ export const getJestConfig = () => {
           .map((p) => p.trim().toLowerCase())
           .filter(Boolean),
         collectCoverage: STORYBOOK_COLLECT_COVERAGE === 'true',
+        exitOnPageError: false,
       },
     },
     watchPlugins: [

@@ -1,21 +1,24 @@
 #!/usr/bin/env node
 'use strict';
 
-import { JestOptions } from './util/getCliOptions';
 import fs from 'fs';
-
 import { execSync } from 'child_process';
 import fetch from 'node-fetch';
 import canBindToHost from 'can-bind-to-host';
 import dedent from 'ts-dedent';
 import path from 'path';
 import tempy from 'tempy';
+import semver from 'semver';
+import { detect as detectPackageManager, PM } from 'detect-package-manager';
+
+import { JestOptions } from './util/getCliOptions';
 import { getCliOptions } from './util/getCliOptions';
 import { getStorybookMetadata } from './util/getStorybookMetadata';
 import { getTestRunnerConfig } from './util/getTestRunnerConfig';
 import { transformPlaywrightJson } from './playwright/transformPlaywrightJson';
 
 import { glob } from 'glob';
+import { TestRunnerConfig } from './playwright/hooks';
 
 // Do this as the first thing so that any code reading it knows the right env.
 process.env.BABEL_ENV = 'test';
@@ -33,6 +36,7 @@ process.on('unhandledRejection', (err) => {
 });
 
 const log = (message: string) => console.log(`[test-storybook] ${message}`);
+const warn = (message: string) => console.warn('\x1b[33m%s\x1b[0m', `[test-storybook] ${message}`);
 const error = (err: { message: any; stack: any }) => {
   if (err instanceof Error) {
     console.error(`\x1b[31m[test-storybook]\x1b[0m ${err.message} \n\n${err.stack}`);
@@ -49,6 +53,40 @@ const cleanup = () => {
     fs.rmSync(indexTmpDir, { recursive: true, force: true });
   }
 };
+
+// Inspired by github.com/nrwl/nx/blob/1975181c200eb288221c8beb94e268fe9659cc26/packages/nx/src/utils/package-manager.ts#L48-106
+async function getExecutorCommand() {
+  const commands = {
+    npm: () => 'npx',
+    pnpm: () => {
+      const pnpmVersion = getPackageManagerVersion('pnpm');
+      const useExec = semver.gte(pnpmVersion, '6.13.0');
+
+      return useExec ? 'pnpm exec' : 'pnpx';
+    },
+    yarn: () => {
+      const yarnVersion = getPackageManagerVersion('yarn');
+      const useBerry = semver.gte(yarnVersion, '2.0.0');
+      return useBerry ? 'yarn exec' : 'yarn';
+    },
+  };
+
+  try {
+    let packageManager = await detectPackageManager();
+    if (packageManager === 'bun') {
+      packageManager = 'npm';
+    }
+
+    return commands[packageManager]();
+  } catch (err) {
+    return commands.npm();
+  }
+}
+
+// Copied from https://github.com/nrwl/nx/blob/1975181c200eb288221c8beb94e268fe9659cc26/packages/nx/src/utils/package-manager.ts#L113-L117
+function getPackageManagerVersion(packageManager: 'npm' | 'pnpm' | 'yarn') {
+  return execSync(`${packageManager} --version`).toString('utf-8').trim();
+}
 
 async function reportCoverage() {
   const coverageFolderE2E = path.resolve(process.cwd(), '.nyc_output');
@@ -75,9 +113,13 @@ async function reportCoverage() {
   // --check-coverage if we want to break if coverage reaches certain threshold
   // .nycrc will be respected for thresholds etc. https://www.npmjs.com/package/nyc#coverage-thresholds
   if (process.env.JEST_SHARD !== 'true') {
-    execSync(`npx nyc report --reporter=text -t ${coverageFolder} --report-dir ${coverageFolder}`, {
-      stdio: 'inherit',
-    });
+    const executorCommand = await getExecutorCommand();
+    execSync(
+      `${executorCommand} nyc report --reporter=text -t ${coverageFolder} --report-dir ${coverageFolder}`,
+      {
+        stdio: 'inherit',
+      }
+    );
   }
 }
 
@@ -143,7 +185,7 @@ async function executeJestPlaywright(args: JestOptions) {
 async function checkStorybook(url: any) {
   try {
     const headers = await getHttpHeaders(url);
-    const res = await fetch(url, { method: 'HEAD', headers });
+    const res = await fetch(url, { method: 'GET', headers });
     if (res.status !== 200) throw new Error(`Unxpected status: ${res.status}`);
   } catch (e) {
     console.error(
@@ -234,6 +276,17 @@ function ejectConfiguration() {
   log('Configuration file successfully copied as test-runner-jest.config.js');
 }
 
+function warnOnce(message: string) {
+  let warned = false;
+  return () => {
+    if (!warned) {
+      // here we specify the ansi code for yellow as jest is stripping the default color from console.warn
+      warn(message);
+      warned = true;
+    }
+  };
+}
+
 const main = async () => {
   const { jestOptions, runnerOptions } = getCliOptions();
 
@@ -244,7 +297,32 @@ const main = async () => {
 
   process.env.STORYBOOK_CONFIG_DIR = runnerOptions.configDir;
 
-  const testRunnerConfig = getTestRunnerConfig(runnerOptions.configDir) || {};
+  const testRunnerConfig = getTestRunnerConfig(runnerOptions.configDir) || ({} as TestRunnerConfig);
+
+  if (testRunnerConfig.preVisit && testRunnerConfig.preRender) {
+    throw new Error(
+      'You cannot use both preVisit and preRender hooks in your test-runner config file. Please use preVisit instead.'
+    );
+  }
+
+  if (testRunnerConfig.postVisit && testRunnerConfig.postRender) {
+    throw new Error(
+      'You cannot use both postVisit and postRender hooks in your test-runner config file. Please use postVisit instead.'
+    );
+  }
+
+  // TODO: remove preRender and postRender hooks likely in 0.20.0
+  if (testRunnerConfig.preRender) {
+    warnOnce(
+      'The "preRender" hook is deprecated and will be removed in later versions. Please use "preVisit" instead in your test-runner config file.'
+    )();
+  }
+  if (testRunnerConfig.postRender) {
+    warnOnce(
+      'The "postRender" hook is deprecated and will be removed in later versions. Please use "postVisit" instead in your test-runner config file.'
+    )();
+  }
+
   if (testRunnerConfig.getHttpHeaders) {
     getHttpHeaders = testRunnerConfig.getHttpHeaders;
   }
@@ -261,6 +339,18 @@ const main = async () => {
 
   if (!isWatchMode && runnerOptions.coverage) {
     process.env.STORYBOOK_COLLECT_COVERAGE = 'true';
+  }
+
+  if (runnerOptions.includeTags) {
+    process.env.STORYBOOK_INCLUDE_TAGS = runnerOptions.includeTags;
+  }
+
+  if (runnerOptions.excludeTags) {
+    process.env.STORYBOOK_EXCLUDE_TAGS = runnerOptions.excludeTags;
+  }
+
+  if (runnerOptions.skipTags) {
+    process.env.STORYBOOK_SKIP_TAGS = runnerOptions.skipTags;
   }
 
   if (runnerOptions.coverageDirectory) {

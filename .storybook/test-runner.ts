@@ -1,5 +1,5 @@
 import { toMatchImageSnapshot } from 'jest-image-snapshot';
-import { getStoryContext } from '../dist/playwright/hooks';
+import { getStoryContext, waitForPageReady } from '../dist/playwright/hooks';
 import type { TestRunnerConfig } from '../dist';
 
 const snapshotsDir = process.env.SNAPSHOTS_DIR || '__snapshots__';
@@ -7,10 +7,15 @@ const customSnapshotsDir = `${process.cwd()}/${snapshotsDir}`;
 const skipSnapshots = process.env.SKIP_SNAPSHOTS === 'true';
 
 const config: TestRunnerConfig = {
+  tags: {
+    exclude: ['exclude'],
+    include: [],
+    skip: ['skip'],
+  },
   setup() {
     expect.extend({ toMatchImageSnapshot });
   },
-  async postRender(page, context) {
+  async postVisit(page, context) {
     // Get entire context of a story, including parameters, args, argTypes, etc.
     const { parameters } = await getStoryContext(page, context);
 
@@ -21,6 +26,8 @@ const config: TestRunnerConfig = {
     if (skipSnapshots) {
       return;
     }
+
+    await waitForPageReady(page);
 
     // Visual snapshot tests
     const image = await page.screenshot({ fullPage: true });
